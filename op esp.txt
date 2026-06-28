@@ -1,0 +1,415 @@
+-- Xeno/JJSploit Compatible ESP Script - CS2 Style
+-- Press Z to toggle
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Camera = workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+
+-- Settings - CS2 Colors
+local ESP_ENABLED = false
+local ESP_KEY = Enum.KeyCode.Z
+local MAX_DISTANCE = 1000
+local BOX_COLOR = Color3.fromRGB(0, 255, 0) -- Green box
+local SKELETON_COLOR = Color3.fromRGB(255, 0, 0) -- Red skeleton
+local VISIBLE_COLOR = Color3.fromRGB(0, 255, 255) -- Cyan when visible
+local WEAPON_COLOR = Color3.fromRGB(0, 150, 255) -- Blue weapon text
+local HEALTH_BAR_WIDTH = 4
+local TEXT_SIZE = 14
+
+-- Storage
+local ESPObjects = {}
+local Connections = {}
+
+-- Utility Functions
+local function GetCharacter(player)
+    return player.Character
+end
+
+local function GetHumanoid(character)
+    if not character then return nil end
+    return character:FindFirstChildOfClass("Humanoid")
+end
+
+local function GetHead(character)
+    if not character then return nil end
+    return character:FindFirstChild("Head")
+end
+
+local function GetTorso(character)
+    if not character then return nil end
+    return character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Torso")
+end
+
+local function GetWeapon(character)
+    if not character then return "None" end
+    
+    -- Check for tools in character (holding weapon)
+    for _, child in ipairs(character:GetChildren()) do
+        if child:IsA("Tool") then
+            return child.Name
+        end
+    end
+    
+    -- Check backpack if no tool equipped
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        local player = Players:GetPlayerFromCharacter(character)
+        if player and player:FindFirstChild("Backpack") then
+            -- Check if they have tools in backpack (has weapons)
+            for _, tool in ipairs(player.Backpack:GetChildren()) do
+                if tool:IsA("Tool") then
+                    return "Unequipped"
+                end
+            end
+        end
+    end
+    
+    return "None"
+end
+
+local function IsTeammate(player)
+    if not LocalPlayer.Team then return false end
+    if not player.Team then return false end
+    if LocalPlayer.Team == player.Team and player ~= LocalPlayer then
+        return true
+    end
+    return false
+end
+
+local function IsVisible(targetPart)
+    local origin = Camera.CFrame.Position
+    local direction = (targetPart.Position - origin).Unit * (targetPart.Position - origin).Magnitude
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterDescendantsInstances = {LocalPlayer.Character, targetPart.Parent}
+    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+    
+    local result = workspace:Raycast(origin, direction, raycastParams)
+    return result == nil
+end
+
+local function WorldToScreen(position)
+    local screenPos, onScreen = Camera:WorldToViewportPoint(position)
+    return Vector2.new(screenPos.X, screenPos.Y), onScreen, screenPos.Z
+end
+
+-- ESP Object Creation
+local function CreateDrawing(type)
+    local drawing = Drawing.new(type)
+    drawing.Visible = false
+    return drawing
+end
+
+local function CreateESP(player)
+    if player == LocalPlayer then return end
+    
+    local esp = {
+        Box = CreateDrawing("Square"),
+        BoxOutline = CreateDrawing("Square"),
+        HealthBar = CreateDrawing("Line"),
+        HealthBarBg = CreateDrawing("Line"),
+        Name = CreateDrawing("Text"),
+        Distance = CreateDrawing("Text"),
+        HealthText = CreateDrawing("Text"),
+        Weapon = CreateDrawing("Text"), -- Weapon display
+        Skeleton = {},
+        Glow = CreateDrawing("Circle")
+    }
+    
+    -- Setup Glow
+    esp.Glow.Radius = 6
+    esp.Glow.Thickness = 2
+    esp.Glow.NumSides = 32
+    esp.Glow.Filled = false
+    esp.Glow.Color = VISIBLE_COLOR
+    esp.Glow.Visible = false
+    
+    -- Setup Box - Green like CS2
+    esp.Box.Thickness = 1.5
+    esp.Box.Filled = false
+    esp.Box.Color = BOX_COLOR
+    esp.BoxOutline.Thickness = 3
+    esp.BoxOutline.Filled = false
+    esp.BoxOutline.Color = Color3.fromRGB(0, 0, 0)
+    
+    -- Setup Health Bar - Green
+    esp.HealthBar.Thickness = HEALTH_BAR_WIDTH
+    esp.HealthBar.Color = Color3.fromRGB(0, 255, 0) -- Green health
+    esp.HealthBarBg.Thickness = HEALTH_BAR_WIDTH + 2
+    esp.HealthBarBg.Color = Color3.fromRGB(0, 0, 0)
+    
+    -- Setup Text
+    esp.Name.Size = TEXT_SIZE
+    esp.Name.Center = true
+    esp.Name.Outline = true
+    esp.Name.Color = Color3.fromRGB(255, 255, 255)
+    
+    esp.Distance.Size = TEXT_SIZE
+    esp.Distance.Center = true
+    esp.Distance.Outline = true
+    esp.Distance.Color = Color3.fromRGB(200, 200, 200)
+    
+    esp.HealthText.Size = TEXT_SIZE - 2
+    esp.HealthText.Center = true
+    esp.HealthText.Outline = true
+    esp.HealthText.Color = Color3.fromRGB(255, 255, 255)
+    
+    -- Weapon Text - Blue like CS2
+    esp.Weapon.Size = TEXT_SIZE
+    esp.Weapon.Center = true
+    esp.Weapon.Outline = true
+    esp.Weapon.Color = WEAPON_COLOR -- Blue weapon name
+    esp.Weapon.Bold = true
+    
+    -- Create Skeleton Lines - RED
+    local skeletonParts = {
+        "Head", "Neck",
+        "Neck", "Torso",
+        "Torso", "LeftArm",
+        "Torso", "RightArm", 
+        "Torso", "LeftLeg",
+        "Torso", "RightLeg",
+        "LeftArm", "LeftForeArm",
+        "RightArm", "RightForeArm",
+        "LeftLeg", "LeftForeLeg",
+        "RightLeg", "RightForeLeg"
+    }
+    
+    for i = 1, #skeletonParts, 2 do
+        local line = CreateDrawing("Line")
+        line.Thickness = 1.5
+        line.Color = SKELETON_COLOR -- Red skeleton
+        table.insert(esp.Skeleton, line)
+    end
+    
+    ESPObjects[player] = esp
+end
+
+local function RemoveESP(player)
+    local esp = ESPObjects[player]
+    if not esp then return end
+    
+    for _, obj in pairs(esp) do
+        if type(obj) == "table" then
+            for _, line in ipairs(obj) do
+                line:Remove()
+            end
+        elseif obj.Remove then
+            obj:Remove()
+        end
+    end
+    
+    ESPObjects[player] = nil
+end
+
+local function GetBodyPart(character, name)
+    local part = character:FindFirstChild(name)
+    if part then return part end
+    
+    local alternatives = {
+        Neck = {"UpperTorso", "Torso"},
+        Torso = {"HumanoidRootPart", "UpperTorso", "Torso"},
+        LeftArm = {"LeftUpperArm", "Left Arm"},
+        RightArm = {"RightUpperArm", "Right Arm"},
+        LeftForeArm = {"LeftLowerArm", "Left Arm"},
+        RightForeArm = {"RightLowerArm", "Right Arm"},
+        LeftLeg = {"LeftUpperLeg", "Left Leg"},
+        RightLeg = {"RightUpperLeg", "Right Leg"},
+        LeftForeLeg = {"LeftLowerLeg", "Left Leg"},
+        RightForeLeg = {"RightLowerLeg", "Right Leg"}
+    }
+    
+    if alternatives[name] then
+        for _, alt in ipairs(alternatives[name]) do
+            part = character:FindFirstChild(alt)
+            if part then return part end
+        end
+    end
+    
+    return nil
+end
+
+local function UpdateESP()
+    for player, esp in pairs(ESPObjects) do
+        local character = GetCharacter(player)
+        local humanoid = GetHumanoid(character)
+        local head = GetHead(character)
+        local torso = GetTorso(character)
+        
+        -- Check if valid target
+        if not character or not humanoid or not head or not torso then
+            for _, obj in pairs(esp) do
+                if type(obj) == "table" then
+                    for _, line in ipairs(obj) do line.Visible = false end
+                else
+                    obj.Visible = false
+                end
+            end
+            continue
+        end
+        
+        -- Team Check
+        if IsTeammate(player) then
+            for _, obj in pairs(esp) do
+                if type(obj) == "table" then
+                    for _, line in ipairs(obj) do line.Visible = false end
+                else
+                    obj.Visible = false
+                end
+            end
+            continue
+        end
+        
+        -- Get positions
+        local headPos, headOnScreen = WorldToScreen(head.Position + Vector3.new(0, head.Size.Y/2, 0))
+        local torsoPos, torsoOnScreen, depth = WorldToScreen(torso.Position)
+        local feetPos, feetOnScreen = WorldToScreen(torso.Position - Vector3.new(0, 3, 0))
+        
+        if not (headOnScreen or torsoOnScreen) or depth > MAX_DISTANCE then
+            for _, obj in pairs(esp) do
+                if type(obj) == "table" then
+                    for _, line in ipairs(obj) do line.Visible = false end
+                else
+                    obj.Visible = false
+                end
+            end
+            continue
+        end
+        
+        -- Calculate box dimensions - 2D Square
+        local boxHeight = math.abs(headPos.Y - feetPos.Y)
+        local boxWidth = boxHeight * 0.6 -- Keep it proportional like CS2
+        
+        -- Visibility Check
+        local visible = IsVisible(head) or IsVisible(torso)
+        local boxColor = visible and VISIBLE_COLOR or BOX_COLOR
+        
+        -- Update Box - GREEN 2D Square
+        esp.Box.Size = Vector2.new(boxWidth, boxHeight)
+        esp.Box.Position = Vector2.new(torsoPos.X - boxWidth/2, headPos.Y)
+        esp.Box.Color = boxColor
+        esp.Box.Visible = ESP_ENABLED
+        
+        esp.BoxOutline.Size = esp.Box.Size
+        esp.BoxOutline.Position = esp.Box.Position
+        esp.BoxOutline.Visible = ESP_ENABLED
+        
+        -- Update Glow
+        esp.Glow.Position = torsoPos
+        esp.Glow.Color = visible and VISIBLE_COLOR or Color3.fromRGB(100, 100, 100)
+        esp.Glow.Visible = ESP_ENABLED
+        
+        -- Update Health Bar - GREEN
+        local healthPercent = humanoid.Health / humanoid.MaxHealth
+        local barHeight = boxHeight * healthPercent
+        local barX = torsoPos.X - boxWidth/2 - 8
+        
+        esp.HealthBarBg.From = Vector2.new(barX, feetPos.Y)
+        esp.HealthBarBg.To = Vector2.new(barX, headPos.Y)
+        esp.HealthBarBg.Visible = ESP_ENABLED
+        
+        esp.HealthBar.From = Vector2.new(barX, feetPos.Y)
+        esp.HealthBar.To = Vector2.new(barX, feetPos.Y - barHeight)
+        esp.HealthBar.Color = Color3.fromRGB(0, 255, 0) -- Always green
+        esp.HealthBar.Visible = ESP_ENABLED
+        
+        -- Update Text Info
+        local distance = math.floor(depth)
+        local weaponName = GetWeapon(character)
+        
+        -- Name above
+        esp.Name.Text = player.Name
+        esp.Name.Position = Vector2.new(torsoPos.X, headPos.Y - 25)
+        esp.Name.Visible = ESP_ENABLED
+        
+        -- Distance below name
+        esp.Distance.Text = tostring(distance) .. "m"
+        esp.Distance.Position = Vector2.new(torsoPos.X, headPos.Y - 12)
+        esp.Distance.Visible = ESP_ENABLED
+        
+        -- Health text on bar
+        esp.HealthText.Text = math.floor(humanoid.Health)
+        esp.HealthText.Position = Vector2.new(barX - 12, feetPos.Y - barHeight/2)
+        esp.HealthText.Visible = ESP_ENABLED
+        
+        -- WEAPON at bottom middle - BLUE like CS2
+        esp.Weapon.Text = "◄ " .. weaponName .. " ►"
+        esp.Weapon.Position = Vector2.new(torsoPos.X, feetPos.Y + 8)
+        esp.Weapon.Color = WEAPON_COLOR
+        esp.Weapon.Visible = ESP_ENABLED and weaponName ~= "None"
+        
+        -- Update Skeleton - RED
+        local skeletonParts = {
+            {"Head", "Neck"},
+            {"Neck", "Torso"},
+            {"Torso", "LeftArm"},
+            {"Torso", "RightArm"},
+            {"Torso", "LeftLeg"},
+            {"Torso", "RightLeg"},
+            {"LeftArm", "LeftForeArm"},
+            {"RightArm", "RightForeArm"},
+            {"LeftLeg", "LeftForeLeg"},
+            {"RightLeg", "RightForeLeg"}
+        }
+        
+        for i, line in ipairs(esp.Skeleton) do
+            local part1Name, part2Name = skeletonParts[i][1], skeletonParts[i][2]
+            local part1 = GetBodyPart(character, part1Name)
+            local part2 = GetBodyPart(character, part2Name)
+            
+            if part1 and part2 then
+                local pos1, onScreen1 = WorldToScreen(part1.Position)
+                local pos2, onScreen2 = WorldToScreen(part2.Position)
+                
+                if onScreen1 and onScreen2 then
+                    line.From = pos1
+                    line.To = pos2
+                    line.Color = visible and VISIBLE_COLOR or SKELETON_COLOR -- Red normally, cyan when visible
+                    line.Visible = ESP_ENABLED
+                else
+                    line.Visible = false
+                end
+            else
+                line.Visible = false
+            end
+        end
+    end
+end
+
+-- Event Connections
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if not gameProcessed and input.KeyCode == ESP_KEY then
+        ESP_ENABLED = not ESP_ENABLED
+        print("ESP " .. (ESP_ENABLED and "Enabled" or "Disabled"))
+    end
+end)
+
+-- Player management
+Players.PlayerAdded:Connect(CreateESP)
+Players.PlayerRemoving:Connect(RemoveESP)
+
+-- Initialize existing players
+for _, player in ipairs(Players:GetPlayers()) do
+    CreateESP(player)
+end
+
+-- Main Loop
+local ESPConnection = RunService.RenderStepped:Connect(UpdateESP)
+
+-- Cleanup function
+function UnloadESP()
+    if ESPConnection then
+        ESPConnection:Disconnect()
+    end
+    for player, _ in pairs(ESPObjects) do
+        RemoveESP(player)
+    end
+    ESPObjects = {}
+    print("ESP Unloaded")
+end
+
+print("=== CS2 Style ESP Loaded ===")
+print("Press Z to toggle")
+print("Colors: Green Box | Red Skeleton | Green Health | Blue Weapon")
+print("Features: 2D Box, Skeleton, Health Bar, Distance, Weapon Name")
