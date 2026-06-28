@@ -45,7 +45,7 @@ Go to **https://wearedevs.net** and download ONE of these:
 4. Click "Attach" or "Inject" in the executor
 
 ### Step 4: Execute Script
-1. Copy the entire `esp.lua` script from this repo
+1. Copy the entire loadstring script from the release tab
 2. Paste into executor's script box
 3. Click **"Execute"** or **"Run"**
-4. Check console (press F9) - you should see:
+4. Done! now you are ready to go!
